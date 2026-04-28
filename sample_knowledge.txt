@@ -1,0 +1,20 @@
+GenAI Roadmap for Success
+
+1. Foundations
+Understand Transformer architectures, attention mechanisms, and how LLMs are trained.
+Master tokenization and context windows.
+
+2. Retrieval Augmented Generation (RAG)
+RAG is the most in-demand skill. It involves:
+- Document Loaders: Extracting text from PDF, HTML, etc.
+- Chunking: Breaking text into manageable pieces.
+- Embeddings: Converting text to math vectors.
+- Vector DBs: Storing vectors in databases like Pinecone or ChromaDB.
+
+3. Agentic Workflows
+Moving from single prompts to multi-agent systems using frameworks like LangGraph or CrewAI.
+Agents can use tools, browse the web, and call external APIs.
+
+4. Production & Evaluation
+Learn how to evaluate AI responses using frameworks like RAGAS.
+Monitor latency and cost of API calls.
