@@ -16,7 +16,7 @@ const AGENTS = [
   { id: 'general', name: 'General Assistant', icon: '🤖', prompt: 'You are a helpful general-purpose AI assistant. Keep answers concise and helpful.', color: '#3b82f6' },
   { id: 'code', name: 'Code Expert', icon: '💻', prompt: 'You are an expert software engineer. Focus on clean code, patterns, and bug fixing. Always use markdown for code blocks.', color: '#10b981' },
   { id: 'data', name: 'Data Analyst', icon: '📊', prompt: 'You are a data scientist. Focus on trends, statistics, and logical reasoning.', color: '#f59e0b' },
-  { id: 'writer', name: 'Creative Writer', icon: '✍️', prompt: 'You are a creative writer. Use expressive language and focus on storytelling and SEO.', color: '#ec4899' }
+  { id: 'resume', name: 'Resume Optimizer', icon: '📄', prompt: 'You are a professional resume writer and career coach. Help users optimize their resumes for specific job roles, improve language, and highlight key achievements.', color: '#8b5cf6' }
 ];
 
 function App() {
@@ -69,6 +69,18 @@ function ChatView({ activeAgent }) {
   const [suggestions, setSuggestions] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  const downloadAsPDF = () => {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const lastAssistantMessage = [...messages].reverse().find(m => m.role === 'assistant' && m.content.length > 50);
+    if (!lastAssistantMessage) return;
+
+    doc.setFontSize(12);
+    const splitText = doc.splitTextToSize(lastAssistantMessage.content, 180);
+    doc.text(splitText, 10, 10);
+    doc.save("Updated_Resume.pdf");
+  };
 
   const extractTextFromPDF = async (file) => {
     const arrayBuffer = await file.arrayBuffer();
@@ -147,17 +159,13 @@ function ChatView({ activeAgent }) {
     setIsLoading(true);
 
     try {
-      // 1. Intent Check: Help/Summary/General overview request
       const helpTerms = ['what to ask', 'summarize', 'help', 'don\'t know', 'overview', 'summary', 'therila', 'what is in', 'about the pdf', 'tell me about'];
       const needsHelp = helpTerms.some(term => finalInput.toLowerCase().includes(term));
 
       if (needsHelp && knowledgeBase.length > 0) {
         const summaryModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const sampleText = knowledgeBase.slice(0, 8).map(k => k.text).join("\n");
-        const result = await summaryModel.generateContent(`
-          The user is asking about the document. Provide a comprehensive summary and suggest 3 specific questions.
-          DOCUMENT CONTENT: ${sampleText}
-        `);
+        const result = await summaryModel.generateContent(`The user is asking about the document. Provide a comprehensive summary and suggest 3 specific questions. Format questions as: Q1: [question]? Q2: [question]? Q3: [question]? CONTENT: ${sampleText}`);
         const responseText = result.response.text();
         const qMatches = responseText.match(/Q\d: (.*?)\?/g) || [];
         setSuggestions(qMatches.map(q => q.replace(/Q\d: /, "").trim()));
@@ -166,7 +174,6 @@ function ChatView({ activeAgent }) {
         return;
       }
 
-      // 2. Vector Search
       let relevantChunks = [];
       if (knowledgeBase.length > 0) {
         try {
@@ -223,27 +230,34 @@ function ChatView({ activeAgent }) {
         {isLoading && <div className="message assistant"><div className="message-bubble">Thinking...</div></div>}
       </div>
       
-      {suggestions.length > 0 && (
-        <div className="suggestions-area">
-          {suggestions.map((q, i) => (
-            <button key={i} className="suggestion-btn" onClick={() => handleSend(q)}>{q}</button>
-          ))}
-        </div>
-      )}
+      <div className="chat-footer">
+        {suggestions.length > 0 && (
+          <div className="suggestions-area">
+            {suggestions.map((q, i) => (
+              <button key={i} className="suggestion-btn" onClick={() => handleSend(q)}>{q}</button>
+            ))}
+          </div>
+        )}
 
-      <div className="input-area">
-        <label className="upload-btn">
-          <input type="file" onChange={handleFileUpload} accept=".txt,.md,.pdf,.docx" style={{ display: 'none' }} />
-          📎
-        </label>
-        <input
-          type="text"
-          placeholder={`Ask ${activeAgent.name}...`}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-        />
-        <button onClick={() => handleSend()}>Send</button>
+        <div className="chat-controls">
+          {activeAgent.id === 'resume' && messages.length > 2 && (
+            <button className="export-btn" onClick={downloadAsPDF}>📥 Download Updated Resume</button>
+          )}
+          <div className="input-area">
+            <label className="upload-btn">
+              <input type="file" onChange={handleFileUpload} accept=".txt,.md,.pdf,.docx" style={{ display: 'none' }} />
+              📎
+            </label>
+            <input
+              type="text"
+              placeholder={`Ask ${activeAgent.name}...`}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+            />
+            <button onClick={() => handleSend()}>Send</button>
+          </div>
+        </div>
       </div>
       {knowledgeBase.length > 0 && <div className="kb-badge">Knowledge Base Active: {knowledgeBase.length} chunks</div>}
     </div>
