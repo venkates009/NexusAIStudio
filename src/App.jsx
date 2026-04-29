@@ -16,7 +16,8 @@ const AGENTS = [
   { id: 'general', name: 'General Assistant', icon: '🤖', prompt: 'You are a helpful general-purpose AI assistant. Keep answers concise and helpful.', color: '#3b82f6' },
   { id: 'code', name: 'Code Expert', icon: '💻', prompt: 'You are an expert software engineer. Focus on clean code, patterns, and bug fixing. Always use markdown for code blocks.', color: '#10b981' },
   { id: 'data', name: 'Data Analyst', icon: '📊', prompt: 'You are a data scientist. Focus on trends, statistics, and logical reasoning.', color: '#f59e0b' },
-  { id: 'resume', name: 'Resume Optimizer', icon: '📄', prompt: 'You are a professional resume writer. When a user provides resume details, always output the full updated resume in a valid JSON block inside [RESUME_JSON]...[/RESUME_JSON] tags so it can be previewed.', color: '#8b5cf6' }
+  { id: 'writer', name: 'Creative Writer', icon: '✍️', prompt: 'You are a creative writer. Use expressive language and focus on storytelling and SEO.', color: '#ec4899' },
+  { id: 'resume', name: 'Resume Expert', icon: '📄', prompt: 'You are an expert resume writer. Help users improve their resumes.', color: '#8b5cf6' }
 ];
 
 function App() {
@@ -34,6 +35,7 @@ function App() {
         </nav>
         <div className="active-agent-info"><small>Current Agent:</small><p>{activeAgent.name}</p></div>
       </aside>
+
       <main className="content">
         <header>
           <h1>{activeTab === 'chat' ? `Real-time: ${activeAgent.name}` : activeTab === 'agents' ? 'Multi-Agent Hub' : 'System Settings'}</h1>
@@ -50,23 +52,25 @@ function App() {
 }
 
 function ChatView({ activeAgent }) {
-  const [messages, setMessages] = useState([{ role: 'assistant', content: `Hello! I am your ${activeAgent.name}. ${activeAgent.prompt}` }]);
+  const [messages, setMessages] = useState([{ role: 'assistant', content: `Hello! I am your ${activeAgent.name}. How can I help you today?` }]);
   const [input, setInput] = useState('');
   const [knowledgeBase, setKnowledgeBase] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [resumeData, setResumeData] = useState(null);
 
-  const downloadAsPDF = () => {
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF();
-    if (!resumeData) return;
-    doc.setFontSize(18); doc.text(resumeData.name || "Resume", 10, 20);
-    doc.setFontSize(10); doc.text(resumeData.contact?.join(" | ") || "", 10, 28);
-    doc.setFontSize(14); doc.text("Professional Summary", 10, 40);
-    doc.setFontSize(10); doc.text(doc.splitTextToSize(resumeData.summary || "", 180), 10, 48);
-    doc.save("Updated_Resume.pdf");
+  const extractTextFromPDF = async (file) => {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdfjsLib = window['pdfjs-dist/build/pdf'];
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      fullText += textContent.items.map(item => item.str).join(" ") + "\n\n";
+    }
+    return fullText;
   };
 
   const handleFileUpload = async (e) => {
@@ -74,30 +78,16 @@ function ChatView({ activeAgent }) {
     if (!file) return;
     setIsProcessing(true);
     try {
-      let text = "";
-      if (file.type === "application/pdf" || file.name.endsWith(".pdf")) text = await extractTextFromPDF(file);
-      else if (file.name.endsWith(".docx")) text = await extractTextFromDOCX(file);
-      else text = await file.text();
-
+      let text = await (file.name.endsWith('.pdf') ? extractTextFromPDF(file) : file.text());
       let rawChunks = text.split('\n\n').filter(c => c.trim().length > 20);
       const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-      const chunksWithEmbeds = await Promise.all(rawChunks.slice(0, 15).map(async (chunk) => {
+      const chunksWithEmbeds = await Promise.all(rawChunks.slice(0, 10).map(async (chunk) => {
         try {
           const result = await embedModel.embedContent(chunk);
           return { text: chunk, embedding: result.embedding.values };
         } catch (e) { return { text: chunk, embedding: new Array(768).fill(0) }; }
       }));
       setKnowledgeBase(chunksWithEmbeds);
-
-      // Trigger structural extraction for Resume Agent
-      if (activeAgent.id === 'resume') {
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const result = await model.generateContent(`Extract resume details from this text and output it ONLY as a JSON block inside [RESUME_JSON]...[/RESUME_JSON]. Fields: name, contact (array), maritalStatus, summary, experience (array of {company, role, years, details}), skills (array). TEXT: ${text.slice(0, 4000)}`);
-        const responseText = result.response.text();
-        const jsonMatch = responseText.match(/\[RESUME_JSON\]([\s\S]*?)\[\/RESUME_JSON\]/);
-        if (jsonMatch) setResumeData(JSON.parse(jsonMatch[1]));
-      }
-
       setMessages(prev => [...prev, { role: 'assistant', content: `Document "${file.name}" indexed successfully.` }]);
     } catch (error) { setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}` }]); }
     finally { setIsProcessing(false); }
@@ -112,23 +102,23 @@ function ChatView({ activeAgent }) {
     setIsLoading(true);
 
     try {
+      // Intent Check for Help
+      const helpTerms = ['what to ask', 'summarize', 'help', 'don\'t know', 'therila'];
+      if (helpTerms.some(t => finalInput.toLowerCase().includes(t)) && knowledgeBase.length > 0) {
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const result = await model.generateContent(`Suggest 3 questions about this doc: ${knowledgeBase.slice(0,3).map(k=>k.text).join('\n')}. Format: Q1: [q]? Q2: [q]? Q3: [q]?`);
+        const text = result.response.text();
+        const qMatches = text.match(/Q\d: (.*?)\?/g) || [];
+        setSuggestions(qMatches.map(q => q.replace(/Q\d: /, "").trim()));
+        setMessages(prev => [...prev, { role: 'assistant', content: text }]);
+        setIsLoading(false); return;
+      }
+
       const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
       const context = knowledgeBase.length > 0 ? `\nCONTEXT: ${knowledgeBase.slice(0, 3).map(k => k.text).join("\n")}` : "";
-      
-      const prompt = `
-        SYSTEM: ${activeAgent.prompt}
-        ${context}
-        ${resumeData ? `CURRENT RESUME DATA: ${JSON.stringify(resumeData)}` : ""}
-        
-        USER REQUEST: ${finalInput}
-        
-        INSTRUCTIONS: If this is the Resume Optimizer agent, always provide the full updated resume JSON inside [RESUME_JSON]...[/RESUME_JSON] tags after your response.
-      `;
-
-      const result = await model.generateContentStream(prompt);
+      const result = await model.generateContentStream(`SYSTEM: ${activeAgent.prompt}${context}\n\nUSER: ${finalInput}`);
       let fullResponse = "";
       setMessages(prev => [...prev, { role: 'assistant', content: "" }]);
-
       for await (const chunk of result.stream) {
         fullResponse += chunk.text();
         setMessages(prev => {
@@ -137,91 +127,34 @@ function ChatView({ activeAgent }) {
           return newMessages;
         });
       }
-
-      // Parse JSON update
-      const jsonMatch = fullResponse.match(/\[RESUME_JSON\]([\s\S]*?)\[\/RESUME_JSON\]/);
-      if (jsonMatch) {
-        try { setResumeData(JSON.parse(jsonMatch[1])); } catch (e) { console.error("JSON Parse Error", e); }
-      }
-
     } catch (error) { setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}` }]); }
     finally { setIsLoading(false); }
   };
 
   return (
-    <div className="split-view">
-      <div className="chat-view">
-        <div className="message-list">
-          {messages.map((msg, i) => (
-            <div key={i} className={`message ${msg.role}`}>
-              <div className="message-bubble">
-                <ReactMarkdown>{msg.content.replace(/\[RESUME_JSON\][\s\S]*?\[\/RESUME_JSON\]/, "")}</ReactMarkdown>
-              </div>
-            </div>
-          ))}
-          {isLoading && <div className="message assistant"><div className="message-bubble">Updating Resume...</div></div>}
-        </div>
-        <div className="chat-footer">
-          {activeAgent.id === 'resume' && resumeData && <button className="export-btn" onClick={downloadAsPDF}>📥 Download PDF</button>}
-          <div className="input-area">
-            <label className="upload-btn"><input type="file" onChange={handleFileUpload} accept=".pdf,.docx,.txt" style={{ display: 'none' }} />📎</label>
-            <input type="text" placeholder={`Edit resume with ${activeAgent.name}...`} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSend()} />
-            <button onClick={() => handleSend()}>Update</button>
+    <div className="chat-view">
+      <div className="message-list">
+        {messages.map((msg, i) => (
+          <div key={i} className={`message ${msg.role}`}>
+            <div className="message-bubble"><ReactMarkdown>{msg.content}</ReactMarkdown></div>
           </div>
-        </div>
+        ))}
+        {isLoading && <div className="message assistant"><div className="message-bubble">Thinking...</div></div>}
       </div>
-      
-      <div className="resume-preview-panel">
-        {resumeData ? (
-          <>
-            <h1>{resumeData.name}</h1>
-            <div className="contact-info">
-              {resumeData.contact?.map((c, i) => <span key={i}>{c}</span>)}
-              {resumeData.maritalStatus && <span>Status: {resumeData.maritalStatus}</span>}
-            </div>
-            <h3>Professional Summary</h3>
-            <p>{resumeData.summary}</p>
-            <h3>Experience</h3>
-            {resumeData.experience?.map((exp, i) => (
-              <div key={i} style={{ marginBottom: '15px' }}>
-                <strong style={{ display: 'block' }}>{exp.company} | {exp.role} ({exp.years})</strong>
-                {exp.details && <p>{exp.details}</p>}
-              </div>
-            ))}
-            <h3>Skills</h3>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {resumeData.skills?.map((s, i) => <span key={i} style={{ background: '#f1f5f9', padding: '4px 10px', borderRadius: '4px', fontSize: '0.85rem' }}>{s}</span>)}
-            </div>
-          </>
-        ) : (
-          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', textAlign: 'center' }}>
-            <p>Upload your resume and activate Resume Optimizer<br/>to see a live interactive preview here.</p>
+      <div className="chat-footer">
+        {suggestions.length > 0 && (
+          <div className="suggestions-area">
+            {suggestions.map((q, i) => <button key={i} className="suggestion-btn" onClick={() => handleSend(q)}>{q}</button>)}
           </div>
         )}
+        <div className="input-area">
+          <label className="upload-btn"><input type="file" onChange={handleFileUpload} accept=".pdf,.docx,.txt" style={{ display: 'none' }} />📎</label>
+          <input type="text" placeholder={`Ask ${activeAgent.name}...`} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSend()} />
+          <button onClick={() => handleSend()}>Send</button>
+        </div>
       </div>
     </div>
   );
-}
-
-// ... (Helper functions outside)
-async function extractTextFromPDF(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdfjsLib = window['pdfjs-dist/build/pdf'];
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let fullText = "";
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const textContent = await page.getTextContent();
-    fullText += textContent.items.map(item => item.str).join(" ") + "\n\n";
-  }
-  return fullText;
-}
-
-async function extractTextFromDOCX(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const result = await window.mammoth.extractRawText({ arrayBuffer });
-  return result.value;
 }
 
 function AgentsView({ setActiveAgent, setActiveTab }) {
