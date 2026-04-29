@@ -31,24 +31,9 @@ function App() {
           <span>Nexus AI</span>
         </div>
         <nav>
-          <button
-            className={activeTab === 'chat' ? 'active' : ''}
-            onClick={() => setActiveTab('chat')}
-          >
-            Chat Studio
-          </button>
-          <button
-            className={activeTab === 'agents' ? 'active' : ''}
-            onClick={() => setActiveTab('agents')}
-          >
-            Agent Hub
-          </button>
-          <button
-            className={activeTab === 'settings' ? 'active' : ''}
-            onClick={() => setActiveTab('settings')}
-          >
-            Settings
-          </button>
+          <button className={activeTab === 'chat' ? 'active' : ''} onClick={() => setActiveTab('chat')}>Chat Studio</button>
+          <button className={activeTab === 'agents' ? 'active' : ''} onClick={() => setActiveTab('agents')}>Agent Hub</button>
+          <button className={activeTab === 'settings' ? 'active' : ''} onClick={() => setActiveTab('settings')}>Settings</button>
         </nav>
         <div className="active-agent-info">
           <small>Current Agent:</small>
@@ -81,6 +66,7 @@ function ChatView({ activeAgent }) {
   ]);
   const [input, setInput] = useState('');
   const [knowledgeBase, setKnowledgeBase] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -88,7 +74,6 @@ function ChatView({ activeAgent }) {
     const arrayBuffer = await file.arrayBuffer();
     const pdfjsLib = window['pdfjs-dist/build/pdf'];
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     let fullText = "";
     for (let i = 1; i <= pdf.numPages; i++) {
@@ -106,11 +91,8 @@ function ChatView({ activeAgent }) {
     return result.value;
   };
 
-  // Helper for Semantic Search (Cosine Similarity)
   const cosineSimilarity = (vecA, vecB) => {
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
+    let dotProduct = 0, normA = 0, normB = 0;
     for (let i = 0; i < vecA.length; i++) {
       dotProduct += vecA[i] * vecB[i];
       normA += vecA[i] * vecA[i];
@@ -122,154 +104,111 @@ function ChatView({ activeAgent }) {
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     setIsProcessing(true);
     try {
       let text = "";
-      if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
-        text = await extractTextFromPDF(file);
-      } else if (file.name.endsWith(".docx")) {
-        text = await extractTextFromDOCX(file);
-      } else {
-        text = await file.text();
-      }
+      if (file.type === "application/pdf" || file.name.endsWith(".pdf")) text = await extractTextFromPDF(file);
+      else if (file.name.endsWith(".docx")) text = await extractTextFromDOCX(file);
+      else text = await file.text();
 
       let rawChunks = text.split('\n\n').filter(c => c.trim().length > 20);
-      
-      // Fallback: If no double newlines, split by single newlines and group
-      if (rawChunks.length === 0) {
-        rawChunks = text.split('\n').filter(c => c.trim().length > 50);
-      }
-      
-      // Still nothing? Just take the whole text if it's long enough
-      if (rawChunks.length === 0 && text.length > 20) {
-        rawChunks = [text];
-      }
+      if (rawChunks.length === 0) rawChunks = text.split('\n').filter(c => c.trim().length > 50);
 
-      // Generate Embeddings for each chunk
       const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
       const chunksWithEmbeds = await Promise.all(rawChunks.map(async (chunk) => {
         try {
           const result = await embedModel.embedContent(chunk);
           return { text: chunk, embedding: result.embedding.values };
         } catch (e) {
-          console.warn("Embedding failed for chunk, using empty vector:", e);
-          return { text: chunk, embedding: new Array(768).fill(0) }; // Fallback
+          return { text: chunk, embedding: new Array(768).fill(0) };
         }
       }));
 
       setKnowledgeBase(chunksWithEmbeds);
-      
-      // Auto-Summary & Suggested Questions
-      const summaryModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const sampleText = rawChunks.slice(0, 5).join("\n"); // Use first few chunks for context
-      const summaryResult = await summaryModel.generateContent(`
-        Summarize this document briefly in 2 sentences and suggest 3 specific questions a user could ask about it.
-        DOCUMENT CONTENT SAMPLE: ${sampleText}
-      `);
-      
-      const summaryText = summaryResult.response.text();
-
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `Knowledge base updated with "${file.name}". \n\n**Document Overview:**\n${summaryText}`
+        content: `Document "${file.name}" indexed successfully. Ask me anything about it!`
       }]);
     } catch (error) {
-      console.error("File processing error:", error);
-      const errorMessage = error.message || "Unknown file error";
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: `Error processing file: ${errorMessage}. Please check the console for details.` 
-      }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}` }]);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+  const handleSend = async (overrideInput) => {
+    const finalInput = overrideInput || input;
+    if (!finalInput.trim() || isLoading) return;
 
-    const userMessage = { role: 'user', content: input };
+    setSuggestions([]);
+    const userMessage = { role: 'user', content: finalInput };
     setMessages(prev => [...prev, userMessage]);
-    setInput('');
+    if (!overrideInput) setInput('');
     setIsLoading(true);
 
     try {
-      // 1. Vector Search (Semantic Retrieval)
+      // 1. Intent Check: Help/Summary request
+      const helpTerms = ['what to ask', 'summarize', 'help', 'don\'t know', 'overview', 'summary', 'therila'];
+      const needsHelp = helpTerms.some(term => finalInput.toLowerCase().includes(term));
+
+      if (needsHelp && knowledgeBase.length > 0) {
+        const summaryModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const sampleText = knowledgeBase.slice(0, 5).map(k => k.text).join("\n");
+        const result = await summaryModel.generateContent(`
+          Provide a 2-sentence summary and 3 suggested questions based on this document.
+          Format questions as: Q1: [question]? Q2: [question]? Q3: [question]?
+          CONTENT: ${sampleText}
+        `);
+        const responseText = result.response.text();
+        const qMatches = responseText.match(/Q\d: (.*?)\?/g) || [];
+        setSuggestions(qMatches.map(q => q.replace(/Q\d: /, "").trim()));
+        setMessages(prev => [...prev, { role: 'assistant', content: responseText }]);
+        setIsLoading(false);
+        return;
+      }
+
+      // 2. Vector Search
       let relevantChunks = [];
       if (knowledgeBase.length > 0) {
         try {
           const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
-          const queryResult = await embedModel.embedContent(input);
+          const queryResult = await embedModel.embedContent(finalInput);
           const queryVector = queryResult.embedding.values;
-
           relevantChunks = knowledgeBase
-            .map(item => ({
-              ...item,
-              similarity: cosineSimilarity(queryVector, item.embedding)
-            }))
+            .map(item => ({ ...item, similarity: cosineSimilarity(queryVector, item.embedding) }))
             .sort((a, b) => b.similarity - a.similarity)
             .slice(0, 3)
-            .filter(item => item.similarity > 0.4) // Lowered threshold slightly for better recall
+            .filter(item => item.similarity > 0.4)
             .map(item => item.text);
-        } catch (searchError) {
-          console.warn("Semantic search failed, falling back to basic RAG:", searchError);
-          // Simple keyword fallback
-          relevantChunks = knowledgeBase
-            .filter(item => item.text.toLowerCase().includes(input.toLowerCase().slice(0, 5)))
-            .slice(0, 2)
-            .map(item => item.text);
+        } catch (e) {
+          relevantChunks = knowledgeBase.filter(item => item.text.toLowerCase().includes(finalInput.toLowerCase().slice(0,5))).slice(0,2).map(item => item.text);
         }
       }
 
-      const contextText = relevantChunks.length > 0
-        ? `\n\nCONTEXT FROM UPLOADED DOCUMENTS:\n${relevantChunks.join('\n---\n')}`
-        : "";
-
+      const contextText = relevantChunks.length > 0 ? `\n\nCONTEXT:\n${relevantChunks.join('\n---\n')}` : "";
       const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const prompt = `
-        SYSTEM INSTRUCTIONS: ${activeAgent.prompt}
-        ${contextText}
-        
-        USER QUESTION: ${input}
-        
-        INSTRUCTIONS: Use the context provided above if available. If not available, use your general knowledge as ${activeAgent.name}.
-      `;
+      const prompt = `SYSTEM: ${activeAgent.prompt}${contextText}\n\nUSER: ${finalInput}`;
 
-      // 3. Streaming Response Logic
       const result = await model.generateContentStream(prompt);
-      
-      // Initialize an empty message for the assistant
       let fullResponse = "";
       setMessages(prev => [...prev, { role: 'assistant', content: "" }]);
 
       for await (const chunk of result.stream) {
-        const chunkText = chunk.text();
-        fullResponse += chunkText;
-        
-        // Update the last message in the list
+        fullResponse += chunk.text();
         setMessages(prev => {
           const newMessages = [...prev];
           newMessages[newMessages.length - 1].content = fullResponse;
           return newMessages;
         });
       }
-
     } catch (error) {
-      console.error("Gemini Error:", error);
-      const errorMessage = error.message || "Unknown error";
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `Gemini API Error: ${errorMessage}. Please verify your API key and connection.`
-      }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: `Gemini Error: ${error.message}` }]);
     } finally {
       setIsLoading(false);
     }
   };
 
-  useEffect(() => {
-    Prism.highlightAll();
-  }, [messages]);
+  useEffect(() => { Prism.highlightAll(); }, [messages]);
 
   return (
     <div className="chat-view">
@@ -277,17 +216,22 @@ function ChatView({ activeAgent }) {
         {messages.map((msg, i) => (
           <div key={i} className={`message ${msg.role}`}>
             <div className="message-bubble">
-              {msg.role === 'assistant' ? (
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
-              ) : (
-                <p>{msg.content}</p>
-              )}
+              {msg.role === 'assistant' ? <ReactMarkdown>{msg.content}</ReactMarkdown> : <p>{msg.content}</p>}
             </div>
           </div>
         ))}
-        {isProcessing && <div className="message assistant"><div className="message-bubble">Processing document...</div></div>}
+        {isProcessing && <div className="message assistant"><div className="message-bubble">Processing...</div></div>}
         {isLoading && <div className="message assistant"><div className="message-bubble">Thinking...</div></div>}
       </div>
+      
+      {suggestions.length > 0 && (
+        <div className="suggestions-area">
+          {suggestions.map((q, i) => (
+            <button key={i} className="suggestion-btn" onClick={() => handleSend(q)}>{q}</button>
+          ))}
+        </div>
+      )}
+
       <div className="input-area">
         <label className="upload-btn">
           <input type="file" onChange={handleFileUpload} accept=".txt,.md,.pdf,.docx" style={{ display: 'none' }} />
@@ -300,23 +244,15 @@ function ChatView({ activeAgent }) {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend()}
         />
-        <button onClick={handleSend}>Send</button>
+        <button onClick={() => handleSend()}>Send</button>
       </div>
-      {knowledgeBase.length > 0 && (
-        <div className="kb-badge">
-          Knowledge Base Active: {knowledgeBase.length} chunks indexed
-        </div>
-      )}
+      {knowledgeBase.length > 0 && <div className="kb-badge">Knowledge Base Active: {knowledgeBase.length} chunks</div>}
     </div>
   );
 }
 
 function AgentsView({ setActiveAgent, setActiveTab }) {
-  const handleActivate = (agent) => {
-    setActiveAgent(agent);
-    setActiveTab('chat');
-  };
-
+  const handleActivate = (agent) => { setActiveAgent(agent); setActiveTab('chat'); };
   return (
     <div className="agents-grid">
       {AGENTS.map((agent) => (
@@ -324,13 +260,7 @@ function AgentsView({ setActiveAgent, setActiveTab }) {
           <div className="agent-icon" style={{ background: agent.color }}>{agent.icon}</div>
           <h3>{agent.name}</h3>
           <p>{agent.prompt}</p>
-          <button
-            className="activate-btn"
-            style={{ '--hover-color': agent.color }}
-            onClick={() => handleActivate(agent)}
-          >
-            Activate Agent
-          </button>
+          <button className="activate-btn" style={{ '--hover-color': agent.color }} onClick={() => handleActivate(agent)}>Activate Agent</button>
         </div>
       ))}
     </div>
@@ -342,11 +272,7 @@ function SettingsView() {
     <div className="settings-view">
       <div className="setting-item">
         <label>Select Model</label>
-        <select>
-          <option>Gemini 1.5 Pro</option>
-          <option>GPT-4o</option>
-          <option>Claude 3.5 Sonnet</option>
-        </select>
+        <select><option>Gemini 2.5 Flash</option></select>
       </div>
     </div>
   );
