@@ -17,7 +17,7 @@ const AGENTS = [
   { id: 'code', name: 'Code Expert', icon: '💻', prompt: 'You are an expert software engineer. Focus on clean code, patterns, and bug fixing. Always use markdown for code blocks.', color: '#10b981' },
   { id: 'data', name: 'Data Analyst', icon: '📊', prompt: 'You are a data scientist. Focus on trends, statistics, and logical reasoning.', color: '#f59e0b' },
   { id: 'writer', name: 'Creative Writer', icon: '✍️', prompt: 'You are a creative writer. Use expressive language and focus on storytelling and SEO.', color: '#ec4899' },
-  { id: 'resume', name: 'Resume Expert', icon: '📄', prompt: 'You are an expert resume writer. Help users improve their resumes.', color: '#8b5cf6' }
+  { id: 'resume', name: 'Resume Architect', icon: '📄', prompt: 'You are a professional resume architect trained in Harvard and Google-standard resume templates. When creating a resume, use a clear structure: [FULL NAME], [CONTACT INFO], [SUMMARY], [EXPERIENCE], [SKILLS], [EDUCATION]. Always format with professional headings and bullet points.', color: '#8b5cf6' }
 ];
 
 function App() {
@@ -58,6 +58,33 @@ function ChatView({ activeAgent }) {
   const [suggestions, setSuggestions] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  const downloadResumePDF = () => {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const lastMsg = [...messages].reverse().find(m => m.role === 'assistant' && m.content.length > 100);
+    if (!lastMsg) return;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(22);
+    const lines = doc.splitTextToSize(lastMsg.content, 180);
+    
+    let y = 20;
+    lines.forEach(line => {
+      if (line.startsWith('#') || line.startsWith('**') || line.toUpperCase() === line) {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(14);
+        y += 10;
+      } else {
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(11);
+        y += 6;
+      }
+      doc.text(line.replace(/[#*]/g, ''), 15, y);
+      if (y > 270) { doc.addPage(); y = 20; }
+    });
+    doc.save("Professional_Resume.pdf");
+  };
 
   const extractTextFromPDF = async (file) => {
     const arrayBuffer = await file.arrayBuffer();
@@ -147,10 +174,15 @@ function ChatView({ activeAgent }) {
             {suggestions.map((q, i) => <button key={i} className="suggestion-btn" onClick={() => handleSend(q)}>{q}</button>)}
           </div>
         )}
-        <div className="input-area">
-          <label className="upload-btn"><input type="file" onChange={handleFileUpload} accept=".pdf,.docx,.txt" style={{ display: 'none' }} />📎</label>
-          <input type="text" placeholder={`Ask ${activeAgent.name}...`} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSend()} />
-          <button onClick={() => handleSend()}>Send</button>
+        <div className="chat-controls" style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '10px 20px' }}>
+          {activeAgent.id === 'resume' && messages.length > 2 && (
+            <button className="export-btn" style={{ background: '#8b5cf6', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', alignSelf: 'flex-start' }} onClick={downloadResumePDF}>📥 Download Professional Resume</button>
+          )}
+          <div className="input-area">
+            <label className="upload-btn"><input type="file" onChange={handleFileUpload} accept=".pdf,.docx,.txt" style={{ display: 'none' }} />📎</label>
+            <input type="text" placeholder={`Ask ${activeAgent.name}...`} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSend()} />
+            <button onClick={() => handleSend()}>Send</button>
+          </div>
         </div>
       </div>
     </div>
