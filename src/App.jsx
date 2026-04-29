@@ -17,12 +17,19 @@ const AGENTS = [
   { id: 'code', name: 'Code Expert', icon: '💻', prompt: 'You are an expert software engineer. Focus on clean code, patterns, and bug fixing. Always use markdown for code blocks.', color: '#10b981' },
   { id: 'data', name: 'Data Analyst', icon: '📊', prompt: 'You are a data scientist. Focus on trends, statistics, and logical reasoning.', color: '#f59e0b' },
   { id: 'writer', name: 'Creative Writer', icon: '✍️', prompt: 'You are a creative writer. Use expressive language and focus on storytelling and SEO.', color: '#ec4899' },
-  { id: 'resume', name: 'Resume Architect', icon: '📄', prompt: 'You are a professional resume architect trained in Harvard and Google-standard resume templates. When creating a resume, use a clear structure: [FULL NAME], [CONTACT INFO], [SUMMARY], [EXPERIENCE], [SKILLS], [EDUCATION]. Always format with professional headings and bullet points.', color: '#8b5cf6' }
+  { id: 'resume', name: 'Resume Architect', icon: '📄', prompt: 'You are a professional resume architect trained in Harvard and Google-standard resume templates.', color: '#8b5cf6' }
 ];
 
 function App() {
   const [activeTab, setActiveTab] = useState('chat');
-  const [activeAgent, setActiveAgent] = useState(AGENTS[0]);
+  const [activeAgent, setActiveAgent] = useState(() => {
+    const saved = localStorage.getItem('nexus_active_agent');
+    return saved ? JSON.parse(saved) : AGENTS[0];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('nexus_active_agent', JSON.stringify(activeAgent));
+  }, [activeAgent]);
 
   return (
     <div className="app-container">
@@ -52,34 +59,32 @@ function App() {
 }
 
 function ChatView({ activeAgent }) {
-  const [messages, setMessages] = useState([{ role: 'assistant', content: `Hello! I am your ${activeAgent.name}. How can I help you today?` }]);
+  const [messages, setMessages] = useState(() => {
+    const saved = localStorage.getItem(`nexus_msgs_${activeAgent.id}`);
+    return saved ? JSON.parse(saved) : [{ role: 'assistant', content: `Hello! I am your ${activeAgent.name}. How can I help you today?` }];
+  });
   const [input, setInput] = useState('');
   const [knowledgeBase, setKnowledgeBase] = useState([]);
+  const [indexedFiles, setIndexedFiles] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem(`nexus_msgs_${activeAgent.id}`, JSON.stringify(messages));
+  }, [messages, activeAgent.id]);
 
   const downloadResumePDF = () => {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     const lastMsg = [...messages].reverse().find(m => m.role === 'assistant' && m.content.length > 100);
     if (!lastMsg) return;
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(22);
     const lines = doc.splitTextToSize(lastMsg.content, 180);
-    
     let y = 20;
     lines.forEach(line => {
-      if (line.startsWith('#') || line.startsWith('**') || line.toUpperCase() === line) {
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(14);
-        y += 10;
-      } else {
-        doc.setFont("helvetica", "normal");
-        doc.setFontSize(11);
-        y += 6;
-      }
+      if (line.startsWith('#') || line.startsWith('**') || line.toUpperCase() === line) { doc.setFont("helvetica", "bold"); doc.setFontSize(14); y += 10; }
+      else { doc.setFont("helvetica", "normal"); doc.setFontSize(11); y += 6; }
       doc.text(line.replace(/[#*]/g, ''), 15, y);
       if (y > 270) { doc.addPage(); y = 20; }
     });
@@ -114,8 +119,9 @@ function ChatView({ activeAgent }) {
           return { text: chunk, embedding: result.embedding.values };
         } catch (e) { return { text: chunk, embedding: new Array(768).fill(0) }; }
       }));
-      setKnowledgeBase(chunksWithEmbeds);
-      setMessages(prev => [...prev, { role: 'assistant', content: `Document "${file.name}" indexed successfully.` }]);
+      setKnowledgeBase(prev => [...prev, ...chunksWithEmbeds]);
+      setIndexedFiles(prev => [...prev, file.name]);
+      setMessages(prev => [...prev, { role: 'assistant', content: `Document "${file.name}" added to Knowledge Base.` }]);
     } catch (error) { setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${error.message}` }]); }
     finally { setIsProcessing(false); }
   };
@@ -129,11 +135,10 @@ function ChatView({ activeAgent }) {
     setIsLoading(true);
 
     try {
-      // Intent Check for Help
       const helpTerms = ['what to ask', 'summarize', 'help', 'don\'t know', 'therila'];
       if (helpTerms.some(t => finalInput.toLowerCase().includes(t)) && knowledgeBase.length > 0) {
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const result = await model.generateContent(`Suggest 3 questions about this doc: ${knowledgeBase.slice(0,3).map(k=>k.text).join('\n')}. Format: Q1: [q]? Q2: [q]? Q3: [q]?`);
+        const result = await model.generateContent(`Suggest 3 questions about these docs: ${knowledgeBase.slice(0,5).map(k=>k.text).join('\n')}. Format: Q1: [q]? Q2: [q]? Q3: [q]?`);
         const text = result.response.text();
         const qMatches = text.match(/Q\d: (.*?)\?/g) || [];
         setSuggestions(qMatches.map(q => q.replace(/Q\d: /, "").trim()));
@@ -142,7 +147,7 @@ function ChatView({ activeAgent }) {
       }
 
       const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const context = knowledgeBase.length > 0 ? `\nCONTEXT: ${knowledgeBase.slice(0, 3).map(k => k.text).join("\n")}` : "";
+      const context = knowledgeBase.length > 0 ? `\nCONTEXT FROM DOCUMENTS:\n${knowledgeBase.slice(0, 10).map(k => k.text).join("\n")}` : "";
       const result = await model.generateContentStream(`SYSTEM: ${activeAgent.prompt}${context}\n\nUSER: ${finalInput}`);
       let fullResponse = "";
       setMessages(prev => [...prev, { role: 'assistant', content: "" }]);
@@ -169,6 +174,11 @@ function ChatView({ activeAgent }) {
         {isLoading && <div className="message assistant"><div className="message-bubble">Thinking...</div></div>}
       </div>
       <div className="chat-footer">
+        {indexedFiles.length > 0 && (
+          <div className="kb-badge" style={{ marginBottom: '10px' }}>
+            Files Active: {indexedFiles.join(', ')} ({knowledgeBase.length} chunks)
+          </div>
+        )}
         {suggestions.length > 0 && (
           <div className="suggestions-area">
             {suggestions.map((q, i) => <button key={i} className="suggestion-btn" onClick={() => handleSend(q)}>{q}</button>)}
