@@ -203,7 +203,7 @@ function ChatView({ activeAgent }) {
     <div className="chat-view">
       <div className="message-list">
         {messages.map((msg, i) => (
-          <div key={i} className={`message ${msg.role} ${msg.role === 'assistant' && isLoading && i === messages.length - 1 ? 'typing' : ''}`}>
+          <div key={i} className={`message ${msg.role}`}>
             <div className="message-bubble">
               {msg.role === 'assistant' ? (
                 <ReactMarkdown>{msg.content}</ReactMarkdown>

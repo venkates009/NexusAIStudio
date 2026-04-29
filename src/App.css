@@ -113,27 +113,6 @@ header h1 {
   animation: fadeIn 0.3s ease-out;
 }
 
-.message.assistant .message-bubble::after {
-  content: '';
-  display: inline-block;
-  width: 8px;
-  height: 15px;
-  background: #3b82f6;
-  margin-left: 4px;
-  vertical-align: middle;
-  animation: blink 0.8s infinite;
-  opacity: 0;
-}
-
-.message.assistant.typing .message-bubble::after {
-  opacity: 1;
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
 .message.user {
   justify-content: flex-end;
 }
