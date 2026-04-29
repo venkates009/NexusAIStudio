@@ -147,17 +147,16 @@ function ChatView({ activeAgent }) {
     setIsLoading(true);
 
     try {
-      // 1. Intent Check: Help/Summary request
-      const helpTerms = ['what to ask', 'summarize', 'help', 'don\'t know', 'overview', 'summary', 'therila'];
+      // 1. Intent Check: Help/Summary/General overview request
+      const helpTerms = ['what to ask', 'summarize', 'help', 'don\'t know', 'overview', 'summary', 'therila', 'what is in', 'about the pdf', 'tell me about'];
       const needsHelp = helpTerms.some(term => finalInput.toLowerCase().includes(term));
 
       if (needsHelp && knowledgeBase.length > 0) {
         const summaryModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const sampleText = knowledgeBase.slice(0, 5).map(k => k.text).join("\n");
+        const sampleText = knowledgeBase.slice(0, 8).map(k => k.text).join("\n");
         const result = await summaryModel.generateContent(`
-          Provide a 2-sentence summary and 3 suggested questions based on this document.
-          Format questions as: Q1: [question]? Q2: [question]? Q3: [question]?
-          CONTENT: ${sampleText}
+          The user is asking about the document. Provide a comprehensive summary and suggest 3 specific questions.
+          DOCUMENT CONTENT: ${sampleText}
         `);
         const responseText = result.response.text();
         const qMatches = responseText.match(/Q\d: (.*?)\?/g) || [];
