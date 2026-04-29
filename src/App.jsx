@@ -106,6 +106,19 @@ function ChatView({ activeAgent }) {
     return result.value;
   };
 
+  // Helper for Semantic Search (Cosine Similarity)
+  const cosineSimilarity = (vecA, vecB) => {
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < vecA.length; i++) {
+      dotProduct += vecA[i] * vecB[i];
+      normA += vecA[i] * vecA[i];
+      normB += vecB[i] * vecB[i];
+    }
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+  };
+
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -121,15 +134,42 @@ function ChatView({ activeAgent }) {
         text = await file.text();
       }
 
-      const chunks = text.split('\n\n').filter(c => c.trim().length > 20);
-      setKnowledgeBase(chunks);
+      let rawChunks = text.split('\n\n').filter(c => c.trim().length > 20);
+      
+      // Fallback: If no double newlines, split by single newlines and group
+      if (rawChunks.length === 0) {
+        rawChunks = text.split('\n').filter(c => c.trim().length > 50);
+      }
+      
+      // Still nothing? Just take the whole text if it's long enough
+      if (rawChunks.length === 0 && text.length > 20) {
+        rawChunks = [text];
+      }
+
+      // Generate Embeddings for each chunk
+      const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+      const chunksWithEmbeds = await Promise.all(rawChunks.map(async (chunk) => {
+        try {
+          const result = await embedModel.embedContent(chunk);
+          return { text: chunk, embedding: result.embedding.values };
+        } catch (e) {
+          console.warn("Embedding failed for chunk, using empty vector:", e);
+          return { text: chunk, embedding: new Array(768).fill(0) }; // Fallback
+        }
+      }));
+
+      setKnowledgeBase(chunksWithEmbeds);
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `Knowledge base updated with "${file.name}". I've indexed ${chunks.length} text chunks from this document.`
+        content: `Knowledge base updated with "${file.name}". I've created vector embeddings for ${chunksWithEmbeds.length} chunks to enable Semantic Search.`
       }]);
     } catch (error) {
       console.error("File processing error:", error);
-      setMessages(prev => [...prev, { role: 'assistant', content: "Error processing file. Please ensure it is a valid text, PDF, or DOCX document." }]);
+      const errorMessage = error.message || "Unknown file error";
+      setMessages(prev => [...prev, { 
+        role: 'assistant', 
+        content: `Error processing file: ${errorMessage}. Please check the console for details.` 
+      }]);
     } finally {
       setIsProcessing(false);
     }
@@ -144,11 +184,32 @@ function ChatView({ activeAgent }) {
     setIsLoading(true);
 
     try {
-      const searchTerms = input.toLowerCase().split(/[\s,?.!]+/).filter(word => word.length >= 3);
-      const relevantChunks = knowledgeBase.filter(chunk => {
-        const chunkLower = chunk.toLowerCase();
-        return searchTerms.some(term => chunkLower.includes(term));
-      }).slice(0, 3);
+      // 1. Vector Search (Semantic Retrieval)
+      let relevantChunks = [];
+      if (knowledgeBase.length > 0) {
+        try {
+          const embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+          const queryResult = await embedModel.embedContent(input);
+          const queryVector = queryResult.embedding.values;
+
+          relevantChunks = knowledgeBase
+            .map(item => ({
+              ...item,
+              similarity: cosineSimilarity(queryVector, item.embedding)
+            }))
+            .sort((a, b) => b.similarity - a.similarity)
+            .slice(0, 3)
+            .filter(item => item.similarity > 0.4) // Lowered threshold slightly for better recall
+            .map(item => item.text);
+        } catch (searchError) {
+          console.warn("Semantic search failed, falling back to basic RAG:", searchError);
+          // Simple keyword fallback
+          relevantChunks = knowledgeBase
+            .filter(item => item.text.toLowerCase().includes(input.toLowerCase().slice(0, 5)))
+            .slice(0, 2)
+            .map(item => item.text);
+        }
+      }
 
       const contextText = relevantChunks.length > 0
         ? `\n\nCONTEXT FROM UPLOADED DOCUMENTS:\n${relevantChunks.join('\n---\n')}`
