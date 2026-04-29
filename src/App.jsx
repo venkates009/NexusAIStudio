@@ -159,9 +159,20 @@ function ChatView({ activeAgent }) {
       }));
 
       setKnowledgeBase(chunksWithEmbeds);
+      
+      // Auto-Summary & Suggested Questions
+      const summaryModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const sampleText = rawChunks.slice(0, 5).join("\n"); // Use first few chunks for context
+      const summaryResult = await summaryModel.generateContent(`
+        Summarize this document briefly in 2 sentences and suggest 3 specific questions a user could ask about it.
+        DOCUMENT CONTENT SAMPLE: ${sampleText}
+      `);
+      
+      const summaryText = summaryResult.response.text();
+
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `Knowledge base updated with "${file.name}". I've created vector embeddings for ${chunksWithEmbeds.length} chunks to enable Semantic Search.`
+        content: `Knowledge base updated with "${file.name}". \n\n**Document Overview:**\n${summaryText}`
       }]);
     } catch (error) {
       console.error("File processing error:", error);
